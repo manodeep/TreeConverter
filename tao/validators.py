@@ -49,11 +49,24 @@ class Positive(FieldValidator):
                 continue
 
             data = fields[fld]
-            if min(data) < 0:
+            if min(data) <= 0:
                 msg = 'Invalid value in "%s".'%fld
                 msg += ' Should be positive, but found value of %s.'%min(data)
                 raise ValidationError(msg)
 
+class NonNegative(FieldValidator):
+
+    def validate_fields(self, fields):
+        for fld in self.fields:
+            if fld not in fields:
+                continue
+
+            data = fields[fld]
+            if min(data) < 0:
+                msg = 'Invalid value in "%s".'%fld
+                msg += ' Should be positive, but found value of %s.'%min(data)
+                raise ValidationError(msg)
+            
         
 class NonZero(FieldValidator):
 

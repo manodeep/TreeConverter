@@ -1,5 +1,5 @@
 import h5py, logging, numpy as np
-from LightCone import LightCone
+from MergerTree import MergerTree
 
 logger = logging.getLogger(__name__)
 
