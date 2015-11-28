@@ -497,8 +497,10 @@ class CTREESConverter(tao.Converter):
                 tree_ids = (forests['TreeRootId'])[ind]
 
                 full_tree = np.empty(1,dtype=src_dtype)
+                counts  = np.zeros(len(ind),dtype=np.int64)
+                offsets = np.zeros(len(ind),dtype=np.int64)
                 old_size = 0
-                for tree_id in tree_ids:
+                for itree,tree_id in enumerate(tree_ids):
                         this_tree = new_tree.load(tree_id,additional_fields)
 
                         ### Fix subs of subs
@@ -508,50 +510,70 @@ class CTREESConverter(tao.Converter):
                         ### Catch both, in case numpy changes behaviour in the future
                         except (KeyError,ValueError) as e:
                                 pass
+                	## terrible hack to allow ascending order
+                	this_tree['scale'] *= -1.0
+                	this_tree['mvir'] *= -1.0
 
+                	
+                	## things are already somewhat ordered -> so quicksort might 
+                	## show worst-case scaling of O(N^2). Use either heapsort or mergersort
+                	this_tree.sort(order=('scale','descid','mvir'),kind='mergesort')
+                	## now restore the original values
+                	this_tree['scale'] *= -1.0
+                	this_tree['mvir'] *= -1.0
+			
+			## change angular momentum to LHaloTree convention
+                	inv_mass = 1.0/this_tree['mvir']
+                	for field in ['Jx','Jy','Jz']:
+                        	### avoid the divide for 3 fields
+                        	### instead multiplying...
+                        	### However, the extra memory can be
+                        	### avoided, if needed (at the expense of speed)
+                        	this_tree[field] *= inv_mass
+
+                	## convert mass units to 10^10 Msun/h
+                	for field in ['mvir','M200b','M200c']:
+                        	this_tree[field] *= 1e-10
+			
+			counts[itree]  = len(this_tree)
+			offsets[itree] = old_size
                         full_tree.resize(old_size + len(this_tree))
 
                         ## python uses 0:N syntax for assign N variables (unlike C where it would 0:N-1)
                         full_tree[old_size:old_size + len(this_tree)] = this_tree
 
 
-                ## terrible hack to allow ascending order
-                full_tree['scale'] *= -1.0
-                full_tree['mvir'] *= -1.0
-
-                
-                full_tree.sort(order=('scale','descid','mvir'))
-                ## now restore the original values
-                full_tree['scale'] *= -1.0
-                full_tree['mvir'] *= -1.0
 
                 ## have to add another sorting order, all
                 ## subhalos must be sorted in mass inside a FOF group.
-                orig_host_ind = (np.where(full_tree['pid'] == -1))[0]
-                if len(orig_host_ind) > 0:
-                        ## Temporarily set the hosts to point to themselves
-                        ## as host
-                        full_tree['pid'][orig_host_ind] = full_tree['id'][orig_host_ind]
+                ## However, the individual subhalo trees need to be swapped
+                ## together. 
+		final_masses = full_tree['mvir'][offsets]
+		## sort in decreasing order of mass
+		sorted_mass_ind = (np.argsort(final_masses))[::-1]
+		
+		## Now swap the individual subhalo trees such that the most massive
+		## subhalo trees come before the less masssive ones. So, the swaps
+		## should follow offsets[sorted_mass_ind] but each swap should 
+		## move elements of size counts[offsets[sorted_mass_ind]]. My 
+		## brain is now twisted!
+		for start,size in zip(offsets[sorted_mass_ind],counts[sorted_mass_ind]):
+			### do something here
+				
+		
+		## we will call the biggest halo mass as the host
+		## this takes care of flybys
+		full_tree['pid'][offsets[sorted_mass_ind[0]]] = -1
+		
+		## all other halos will pretend that the most massive halo is the host
+		## Does this need to be done at all redshifts?
+		full_tree['pid'][offsets[sorted_mass_ind[1:]]]  = full_tree['id'][offsets[sorted_mass_ind[0]]
+		full_tree['upid'][offsets[sorted_mass_ind[1:]]] = full_tree['id'][offsets[sorted_mass_ind[0]]
+	
 
-                ### sort on each scale, within each FOF group. 
-                        
-
-                ## restore the hostids to be -1 -> consistent tree convention
-                if len(orig_host_ind) > 0:
-                        full_tree['pid'][orig_host_ind] = -1
+		
                 
-                ## change angular momentum to LHaloTree convention
-                inv_mass = 1.0/full_tree['mvir']
-                for field in ['Jx','Jy','Jz']:
-                        ### avoid the divide for 3 fields
-                        ### instead multiplying...
-                        ### However, the extra memory can be
-                        ### avoided, if needed (at the expense of speed)
-                        full_tree[field] *= inv_mass
 
-                ## convert mass units to 10^10 Msun/h
-                for field in ['mvir','M200b','M200c']:
-                        full_tree[field] *= 1e-10
                 
 
                 ## Now, generate a new array with the MergerTree fields
