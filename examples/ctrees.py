@@ -24,6 +24,23 @@ a2z = lambda a: 1./a - 1.
 z2a = lambda z: 1./(1.+z)
 opener = lambda filename,mode: gzip.open(filename,mode) if filename.endswith('.gz') else open(filename,mode)
 
+def generate_filename(filebase):
+        if filebase.endswith('.gz'):
+                gzip_file = filebase
+                uncompressed_file = filebase[:-3]
+        else:
+                gzip_file  = filebase+'.gz'
+                uncompressed_file  = filebase
+        
+        if os.path.isfile(gzip_file):
+                return gzip_file
+        else:
+                if os.path.isfile(uncompressed_file):
+                        return uncompressed_file
+                else:
+                        return None
+                
+
 def read_file_possibly_gzipped(file,max_chunks):
 
         if not hasattr(file,'__read__'):
@@ -184,11 +201,9 @@ class TreesDir(BaseDirectory):
     def load(self, tree_root_id, additional_fields=[]):
 	p = self._get_ParseFields(additional_fields)
 	tree_root_id_str = str(tree_root_id)
-	location_file = self.dir_path + '/locations.dat.gz'
-	if not os.path.isfile(location_file):
-		location_file = self.dir_path + '/locations.dat'
-		
-	if os.path.isfile(location_file):
+	location_file = generate_filename(self.dir_path + '/locations.dat.gz')
+        
+	if location_file is not None:
 	    with opener(location_file, 'rb') as f:
 		f.readline()
 		for l in f:
@@ -198,10 +213,10 @@ class TreesDir(BaseDirectory):
 		else:
 		    raise ValueError("Cannot find this tree_root_id: %d."%(\
 			    tree_root_id))
-	    tree_file = '%s/%s.gz'%(self.dir_path, items[-1])
-            if not os.path.isfile(tree_file):
-                    tree_file = '%s/%s'%(self.dir_path, items[-1])
-				
+	    tree_file = generate_filename('%s/%s.gz'%(self.dir_path, items[-1]))
+            if tree_file is None:
+                    raise IOError('Could not find tree file {}'.format(tree_file))
+
 	    with opener(tree_file, 'rb') as f:
 		f.seek(int(items[2]))
 		X = []
@@ -211,9 +226,9 @@ class TreesDir(BaseDirectory):
 	else:
 	    for fn in self.files:
 
-                tree_file = '%s/%s.gz'%(self.dir_path, fn)
-                if not os.path.isfile(tree_file):
-                        tree_file = '%s/%s'%(self.dir_path, fn)
+                tree_file = generate_filename('%s/%s.gz'%(self.dir_path, fn))
+                if tree_file is None:
+                        raise IOError('Could not find tree file {}'.format(tree_file))
 
 		with opener(tree_file, 'r') as f:
 		    l = '#'
@@ -277,23 +292,23 @@ class CTREESConverter(tao.Converter):
 	"""
 
 	if self.args.parameters:
-                par = open(self.args.parameters, 'r').read()
-                hubble = re.search(r'h0\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
-                omega_m = re.search(r'Om\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
-                omega_l = re.search(r'Ol\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
-                box_size = re.search(r'BOX_WIDTH\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
+            par = open(self.args.parameters, 'r').read()
+            hubble = re.search(r'h0\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
+            omega_m = re.search(r'Om\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
+            omega_l = re.search(r'Ol\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
+            box_size = re.search(r'BOX_WIDTH\s*=\s*(\d*\.?\d*)', par, re.I).group(1)
 
         else:
-                if not self.args.trees_dir:
-                        raise tao.ConversionError('Must specify either the CTREES config or the trees location')
+            if not self.args.trees_dir:
+                raise tao.ConversionError('Must specify either the CTREES config or the trees location')
                 
-                ## read in the first chunk bytes. (DO NOT read in entire file)
-                chunk_guess = 5000
-                first_tree = read_file_possibly_gzipped(self.args.trees_dir+'/tree_0_0_0.dat',chunk_guess)
-                hubble = re.search(r'h0\s*=\s*(\d*\.?\d*)', first_tree, re.I).group(1)
-                omega_m = re.search(r'Omega_M\s*=\s*(\d*\.?\d*)', first_tree, re.I).group(1)
-                omega_l = re.search(r'Omega_L\s*=\s*(\d*\.?\d*)', first_tree, re.I).group(1)
-                box_size = re.search(r'Full\s+box\s+size\s+=\s+(\d*\.?\d*)', first_tree, re.I).group(1)
+            ## read in the first chunk bytes. (DO NOT read in entire file)
+            chunk_guess = 5000
+            first_tree = read_file_possibly_gzipped(self.args.trees_dir+'/tree_0_0_0.dat',chunk_guess)
+            hubble = re.search(r'h0\s*=\s*(\d*\.?\d*)', first_tree, re.I).group(1)
+            omega_m = re.search(r'Omega_M\s*=\s*(\d*\.?\d*)', first_tree, re.I).group(1)
+            omega_l = re.search(r'Omega_L\s*=\s*(\d*\.?\d*)', first_tree, re.I).group(1)
+            box_size = re.search(r'Full\s+box\s+size\s+=\s+(\d*\.?\d*)', first_tree, re.I).group(1)
 			
 	return {
 	    'box_size': box_size,
@@ -373,98 +388,102 @@ class CTREESConverter(tao.Converter):
 
 
     def map_FirstProgenitor(self, tree):
-            """
-            FirstProgenitor crosses scale factors. 
-            """
+        """
+        FirstProgenitor crosses scale factors. 
+        """
+
+        first_prog = np.empty(len(tree), np.int32)
+        first_prog.fill(-1)
+        unique_descids = np.unique(tree['descid'])
+        for uniq_descid in unique_descids:
+            ind = (np.where(tree['descid'] == uniq_descid))[0]
+            max_mass_ind = np.argmax(tree['mvir'][ind])
+
+            desc_loc = (np.where(tree['id'] == uniq_descid))[0]
+            first_prog[desc_loc] = ind[max_mass_ind]
             
-            first_prog = np.empty(len(tree), np.int32)
-            first_prog.fill(-1)
-            unique_descid_locs = np.unique(tree['descid'],return_index=True)
-            for uniq_id_loc in unique_descid_locs:
-                    ind = (np.where(tree['descid'] == tree['descid'][uniq_id_loc]))[0]
-                    max_mass_ind = np.argmax(tree['mvir'][ind])
-                    first_prog[uniq_id_loc] = ind[max_mass_ind]
-            
-            return first_prog
+        return first_prog
 
     def map_NextProgenitor(self,tree):
-            """
-            NextProgenitor might not cross scale-factors
-            """
-            next_prog = np.empty(len(tree), np.int32)
-            next_prog.fill(-1)
-            unique_descid_locs = np.unique(tree['descid'],return_index=True)
-            for uniq_id_loc in unique_descid_locs:
-                    ind = (np.where(tree['descid'] == tree['descid'][uniq_id_loc]))[0]
-                    if len(ind) > 1:
-                            ### sort in descending order of mass
-                            sorted_mass_ind = (np.argsort(tree['mvir'][ind]))[::-1]
+        """
+        NextProgenitor might not cross scale-factors
+        """
+        next_prog = np.empty(len(tree), np.int32)
+        next_prog.fill(-1)
+        unique_descids = np.unique(tree['descid'])
+        for uniq_descid in unique_descids:
+            ind = (np.where(tree['descid'] == uniq_descid))[0]
+            if len(ind) > 1:
+                ### sort in descending order of mass
+                sorted_mass_ind = (np.argsort(tree['mvir'][ind]))[::-1]
 
-                            lhs_inds = ind[sorted_mass_ind]
-                            rhs_inds = np.roll(lhs_inds,-1)
+                lhs_inds = ind[sorted_mass_ind]
+                rhs_inds = np.roll(lhs_inds,-1)
+                
+                next_prog[lhs_inds] = rhs_inds
 
-                            next_prog[lhs_inds] = rhs_inds
-
-                            ## now fix the last one so that the last progenitor
-                            ## does not point back to the first progenitor
-                            next_prog[lhs_inds[-1]] = -1
-                                                    
-                            
+                ## now fix the last one so that the last progenitor
+                ## does not point back to the first progenitor
+                next_prog[lhs_inds[-1]] = -1
                     
-            return next_prog
+        return next_prog
 
     def map_FirstHaloInFOFgroup(self,tree):
-
-            first_halo = np.empty(len(tree),np.int32)
-            first_halo.fill(-1)
-            host_inds = (np.where(tree['pid'] == -1))[0]
-            if len(host_inds) > 0:
-                    ## Host halos points to themselves
-                    first_halo[host_inds] = host_inds
-
-                    ## Now set the subhalos
-                    hostids = tree['id'][host_inds]
-                    for ii,hostid in enumerate(hostids):
-                            ind_subs = (np.where(tree['pid'] == hostid))[0]
-                            if len(ind_subs) > 0:
-                                    first_halo[ind_subs] = host_inds[ii]
-
-            return first_halo
             
+        first_halo = np.empty(len(tree),np.int32)
+        first_halo.fill(-1)
+        host_inds = (np.where(tree['pid'] == -1))[0]
+        if len(host_inds) > 0:
+            ## Host halos points to themselves
+            first_halo[host_inds] = host_inds
+            
+            ## Now set the subhalos
+            hostids = tree['id'][host_inds]
+            for ii,hostid in enumerate(hostids):
+                ind_subs = (np.where(tree['pid'] == hostid))[0]
+                if len(ind_subs) > 0:
+                    first_halo[ind_subs] = host_inds[ii]
+                    
+            return first_halo
+
+
+        return None
+        
     def map_NextHaloInFOFgroup(self,tree):
-            next_halo = np.empty(len(tree),np.int32)
-            next_halo.fill(-1)
-            host_inds = (np.where(tree['pid'] == -1))[0]
-            if len(host_inds) > 0:
-                    hostids = tree['id'][host_inds]
-                    for ii,hostid in enumerate(hostids):
-                            ind_subs = (np.where(tree['pid'] == hostid))[0]
-                            if len(ind_subs) > 0:
-                                    ### at least the host has to be set,
-                                    ## and then all of the subs. However,
-                                    ## we will need to fix the last subhalo --> since
-                                    ## np.roll will attempt to point the last subhalo
-                                    ## to the host. 
+        next_halo = np.empty(len(tree),np.int32)
+        next_halo.fill(-1)
+        host_inds = (np.where(tree['pid'] == -1))[0]
+        if len(host_inds) > 0:
+            hostids = tree['id'][host_inds]
+            for ii,hostid in enumerate(hostids):
+                ind_subs = (np.where(tree['pid'] == hostid))[0]
+                if len(ind_subs) > 0:
+                    ### at least the host has to be set,
+                    ### and then all of the subs. However,
+                    ### we will need to fix the last subhalo --> since
+                    ### np.roll will attempt to point the last subhalo to the host
+                        
+                    ### Note that ind_subs is used directly since
+                    ### those inds come directly from the tree
+                    lhs_inds = np.hstack((host_inds[ii],ind_subs))
+                    rhs_inds = np.roll(lhs_inds,-1)
 
-                                    ### Note that ind_subs is used directly since
-                                    ### those inds come directly from the tree
-                                    lhs_inds = np.hstack((host_inds[ii],ind_subs))
-                                    rhs_inds = np.roll(lhs_inds,-1)
+                    ## check that assumptions are valid
+                    assert np.max(lhs_inds) < len(tree),'LHS inds is wrong (can not be bigger than length of tree)'
+                    assert np.max(rhs_inds) < len(tree),'RHS inds is wrong (can not be bigger than length of tree)'
 
-                                    ## check that assumptions are valid
-                                    assert np.max(lhs_inds) < len(tree),'LHS inds is wrong (can not be bigger than length of tree)'
-                                    assert np.max(rhs_inds) < len(tree),'RHS inds is wrong (can not be bigger than length of tree)'
+                    ## now set the entire array
+                    next_halo[lhs_inds] = rhs_inds
 
-                                    ## now set the entire array
-                                    next_halo[lhs_inds] = rhs_inds
-
-                                    ## fix the last subhalo issue.
-                                    ## There is guaranteed to be at least
-                                    ## two elements in the lhs_inds array (host, + at least 1 sub)
-                                    next_halo[lhs_inds[-1]] = -1
+                    ## fix the last subhalo issue.
+                    ## There is guaranteed to be at least
+                    ## two elements in the lhs_inds array (host, + at least 1 sub)
+                    next_halo[lhs_inds[-1]] = -1
 
             
             return next_halo
+
+        return None
 
     def iterate_trees(self):
 	"""
@@ -479,124 +498,89 @@ class CTREESConverter(tao.Converter):
         src_dtype = new_tree.get_src_dtype(additional_fields)
         print src_dtype
 
-        forest_dtype = np.dtype([
-                        ('TreeRootId',np.int64),
-                        ('ForestId',np.int64),
-                        ])
+        ### Load the forests into a dictionary.
 
-        # Load the forests
-        forests = np.genfromtxt(self.args.trees_dir+'/forests.list',dtype=forest_dtype)
-        ## Multiple trees might come from the same forest -> get them together
-        ## this means more cache hits when we loop over unique forest ids
-        forests.sort(order='ForestId')
+        ### First, generate filenames that might be gzipped
+        forests_filename = generate_filename(self.args.trees_dir+'/forests.list')
+        if forests_filename is None:
+            raise IOError('Could not find forests file {}'.format(forests_filename))
 
-        ## only loop over unique forests
-        for forest_id in np.unique(forests['ForestId']):
 
-                ind = (np.where(forests['ForestId'] == forest_id))[0]
-                tree_ids = (forests['TreeRootId'])[ind]
+        ### create an empty forests dictionary. I find this
+        ### syntax better than "forests = {}" -> much more obvious
+        ### that forests is an empty python dictionary.
+        ### forests will be a dictionary with keys = forest_ids
+        ### and values is a list of of tree_root_ids. 
+        forests = dict()
+        with opener(forests_filename,'rb') as f:
+            for line in f:
+                ### the first line will have the header
+                if line[0] == '#': continue
+                tree_root_id, forest_id = map(int,line.split())
 
-                full_tree = np.empty(1,dtype=src_dtype)
-                counts  = np.zeros(len(ind),dtype=np.int64)
-                offsets = np.zeros(len(ind),dtype=np.int64)
-                old_size = 0
-                for itree,tree_id in enumerate(tree_ids):
-                        this_tree = new_tree.load(tree_id,additional_fields)
+                ## if the forest_id does not exists already, then
+                ## create an empty list, and then append tree_root_id
+                forests.setdefault(forest_id,[]).append(tree_root_id)
 
-                        ### Fix subs of subs
-                        try:
-                                this_tree['pid'] = this_tree['upid']
-                        ### numpy raises ValueError when key is absent !!!
-                        ### Catch both, in case numpy changes behaviour in the future
-                        except (KeyError,ValueError) as e:
-                                pass
-                	## terrible hack to allow ascending order
-                	this_tree['scale'] *= -1.0
-                	this_tree['mvir'] *= -1.0
+        ## only loop over unique forests. 
+        ## iteritems will return key, value but we 
+        ## do not care about forest_ids -> hence the "_".
+        for _,tree_ids in forests.iteritems():
+            ntrees = len(tree_ids)
+            full_tree = np.empty((1,),dtype=src_dtype)
+            counts  = np.zeros(ntrees,dtype=np.int64)
+            offsets = np.zeros(ntrees,dtype=np.int64)
+            old_size = 0
+            for itree,tree_id in enumerate(tree_ids):
+                tree = new_tree.load(tree_id,additional_fields)
+                
+                ### Fix subs of subs
+                try:
+                    tree['pid'] = tree['upid']
+                    ### numpy raises ValueError when key is absent !!!
+                    ### Catch both, in case numpy changes behaviour in the future
+                except (KeyError,ValueError) as e:
+                        pass
 
-                	
-                	## things are already somewhat ordered -> so quicksort might 
-                	## show worst-case scaling of O(N^2). Use either heapsort or mergersort
-                	this_tree.sort(order=('scale','descid','mvir'),kind='mergesort')
-                	## now restore the original values
-                	this_tree['scale'] *= -1.0
-                	this_tree['mvir'] *= -1.0
+                ## terrible hack to allow ascending order
+                tree['scale'] *= -1.0
+                tree['mvir'] *= -1.0
+                
+                ## things are already somewhat ordered -> so quicksort might 
+                ## show worst-case scaling of O(N^2). Use either heapsort or mergersort
+                tree.sort(order=('scale','descid','mvir'),kind='mergesort')
+                
+                ## now restore the original values
+                tree['scale'] *= -1.0
+                tree['mvir'] *= -1.0
 			
-			## change angular momentum to LHaloTree convention
-                	inv_mass = 1.0/this_tree['mvir']
-                	for field in ['Jx','Jy','Jz']:
-                        	### avoid the divide for 3 fields
-                        	### instead multiplying...
-                        	### However, the extra memory can be
-                        	### avoided, if needed (at the expense of speed)
-                        	this_tree[field] *= inv_mass
+                ## change angular momentum to LHaloTree convention
+                inv_mass = 1.0/tree['mvir']
+                for field in ['Jx','Jy','Jz']:
+                    ### avoid the divide for 3 fields and multiply with reciprocal instead
+                    ### However, the extra memory can be avoided, if needed (at the expense of speed)
+                    tree[field] *= inv_mass
 
-                	## convert mass units to 10^10 Msun/h
-                	for field in ['mvir','M200b','M200c']:
-                        	this_tree[field] *= 1e-10
+                ## convert mass units to 10^10 Msun/h
+                for field in ['mvir','M200b','M200c']:
+                    tree[field] *= 1e-10
 			
-			counts[itree]  = len(this_tree)
-			offsets[itree] = old_size
-                        full_tree.resize(old_size + len(this_tree))
 
-                        ## python uses 0:N syntax for assign N variables (unlike C where it would 0:N-1)
-                        full_tree[old_size:old_size + len(this_tree)] = this_tree
+                counts[itree]  = len(tree)
+                offsets[itree] = old_size
+                full_tree.resize(old_size + len(tree))
 
+                ## python uses 0:N syntax for assign N variables (unlike C where it would 0:N-1)
+                full_tree[old_size:old_size + len(tree)] = tree
 
-
-                ## have to add another sorting order, all
-                ## subhalos must be sorted in mass inside a FOF group.
-                ## However, the individual subhalo trees need to be swapped
-                ## together. 
-		final_masses = full_tree['mvir'][offsets]
-		## sort in decreasing order of mass
-		sorted_mass_ind = (np.argsort(final_masses))[::-1]
-		
-		## Now swap the individual subhalo trees such that the most massive
-		## subhalo trees come before the less masssive ones. So, the swaps
-		## should follow offsets[sorted_mass_ind] but each swap should 
-		## move elements of size counts[offsets[sorted_mass_ind]]. My 
-		## brain is now twisted!
-		for start,size in zip(offsets[sorted_mass_ind],counts[sorted_mass_ind]):
-			### do something here
-				
-		
-		## we will call the biggest halo mass as the host
-		## this takes care of flybys
-		full_tree['pid'][offsets[sorted_mass_ind[0]]] = -1
-		
-		## all other halos will pretend that the most massive halo is the host
-		## Does this need to be done at all redshifts?
-		full_tree['pid'][offsets[sorted_mass_ind[1:]]]  = full_tree['id'][offsets[sorted_mass_ind[0]]
-		full_tree['upid'][offsets[sorted_mass_ind[1:]]] = full_tree['id'][offsets[sorted_mass_ind[0]]
-	
-
-		
-                
 
                 
-
-                ## Now, generate a new array with the MergerTree fields
-                ## However, this would require a copy of the array and
-                ## potentially cause severe memory strain. Avoiding the
-                ## copy and falling back to the slower method of map_functions
-                ## to generate the fields. (i.e., chosing slow but runs over
-                ## fast but crashes)
-#                 required_mtree_fields = [
-#                         ('Descendant',np.int32),
-#                         ('FirstProgenitor',np.int32),
-#                         ('NextProgenitor',np.int32),
-#                         ('NextHaloInFOFgroup',np.int32),
-#                         ('Len',np.int32),
-#                         ]
-#                 new_dtype = np.dtype(src_dtype.descr + required_mtree_fields)
-#                 print new_dtype
-
+            ### Still need to fix flybys but this can only be done
+            ### after the entire forest has been loaded. 
                 
-                                     
+            yield full_tree
+                
+                
+                                                                                          
 
-
-#                 if np.max(full_tree['num_prog']) > 2 :
-#                 Tracer()()
-                yield full_tree
-		
+                                                                        
