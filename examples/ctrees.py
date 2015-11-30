@@ -25,39 +25,39 @@ z2a = lambda z: 1./(1.+z)
 opener = lambda filename,mode: gzip.open(filename,mode) if filename.endswith('.gz') else open(filename,mode)
 
 def generate_filename(filebase):
-        if filebase.endswith('.gz'):
-                gzip_file = filebase
-                uncompressed_file = filebase[:-3]
-        else:
-                gzip_file  = filebase+'.gz'
-                uncompressed_file  = filebase
+    if filebase.endswith('.gz'):
+        gzip_file = filebase
+	uncompressed_file = filebase[:-3]
+    else:
+        gzip_file  = filebase+'.gz'
+	uncompressed_file  = filebase
         
-        if os.path.isfile(gzip_file):
-                return gzip_file
-        else:
-                if os.path.isfile(uncompressed_file):
-                        return uncompressed_file
-                else:
-                        return None
+    if os.path.isfile(gzip_file):
+        return gzip_file
+    else:
+        if os.path.isfile(uncompressed_file):
+            return uncompressed_file
+	else:
+            return None
                 
 
 def read_file_possibly_gzipped(file,max_chunks):
 
-        if not hasattr(file,'__read__'):
-		try:
-			f = open(file,'r')
-		except IOError:
-                        f = gzip.open(file+'.gz','rb')
-		except:
-			raise tao.ConversionError('Could not open file. Neither as ascii or gz')
+    if not hasattr(file,'__read__'):
+        try:
+            f = open(file,'r')
+	except IOError:
+            f = gzip.open(file+'.gz','rb')
+	except:
+            raise tao.ConversionError('Could not open file. Neither as ascii or gz')
 	
 	try:
-		chunks = f.read(max_chunks)
+	    chunks = f.read(max_chunks)
 	except EOFError:
-		## not enough bytes. Just read-in the entire file then
-		chunks = f.read()
+	    ## not enough bytes. Just read-in the entire file then
+            chunks = f.read()
         except:
-                raise tao.ConversionError('Could not read in from the file')
+            raise tao.ConversionError('Could not read in from the file')
 		
 	f.close
 	return chunks
@@ -95,8 +95,8 @@ class BaseParseFields():
 	    self._formats = map(self._get_format, names_s)
 
     def get_src_dtype(self):
-            return np.dtype({'names':self._names, \
-                                     'formats':self._formats})
+        return np.dtype({'names':self._names, \
+                             'formats':self._formats})
             
     def parse_line(self, l):
 	items = l.split()
