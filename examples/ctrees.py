@@ -832,7 +832,11 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
     print("Resetting number of forests from {} to isolated forests = {}".format(num_forests,num_isolated_forests))
     ### reset num_forests
     num_forests = num_isolated_forests
-        
+
+    max_num_elements_buffer = 100000
+    output_buffer = np.empty(max_num_elements_buffer,dtype=output_dtype)
+    curr_size_output_buffer = 0
+    
     with open(output_file,'wb') as f:
         totntrees = struct.pack('<i4',0)
         totnhalos = struct.pack('<i4',0)
@@ -854,9 +858,10 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
         for ii,src_tree in enumerate(tree_generator):
             if isolated_forests[ii] == False:
                 continue
-            
-            treeNhalos.append(len(src_tree))
-            totnhalos += len(src_tree)
+
+            Nhalos = len(src_tree)
+            treeNhalos.append(Nhalos)
+            totnhalos += Nhalos
             totntrees += 1
             
             src_dtype = src_tree.dtype            
@@ -908,13 +913,34 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
 
                     assert ifof+1 < len(ind), 'Seeking past FOF indices array'
                     dst_tree['NextHaloInFOFgroup'][last_sub] = ind[ifof+1]
-                    
+
+            assert Nhalos == len(dst_tree),'len(dst_tree) must be the same as Nhalos'
+            #### Instead of writing out directly, add to the output buffer
+            #### and then intermittently write out the output buffer
+            if (curr_size_output_buffer + Nhalos) >=  max_num_elements_buffer:
+                output_buffer[0:curr_size_output_buffer].tofile(f)
+                curr_size_output_buffer = 0
+
+            ### Is the output buffer big enough to hold this tree?
+            ### Resize if that is not the case.
+            if Nhalos > max_num_elements_buffer:
+                output_buffer.resize(Nhalos)
+                max_num_elements_buffer = Nhalos
+
+            assert curr_size_output_buffer + Nhalos <= max_num_elements_buffer,"Array overflow will happen in output buffer"
+            output_buffer[curr_size_output_buffer:curr_size_output_buffer+Nhalos] = dst_tree.copy()
+            curr_size_output_buffer += Nhalos
             
-            dst_tree.tofile(f)
             if rank==0:
                 bar.update(ii)
 
 
+        ## Is there any data in the output_buffer -> write that to disk
+        if curr_size_output_buffer > 0:
+            output_buffer[0:curr_size_output_buffer].tofile(f)
+            curr_size_output_buffer = 0
+            
+        assert curr_size_output_buffer == 0, 'Must have written all bytes in output buffer'
         print("len(treeNhalos) = {} num_forests = {}".format(len(treeNhalos),num_forests))
         assert len(treeNhalos) == num_forests, "TreeNhalos has %r forests instead of %r " % (len(treeNhalos),num_forests)
         treeNhalos = np.array(treeNhalos)
