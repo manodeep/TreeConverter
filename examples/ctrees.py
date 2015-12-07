@@ -451,10 +451,20 @@ class CTREESConverter():
         first_prog.fill(-1)
         unique_descids  = np.unique(tree['descid'])
         for uniq_descid in unique_descids:
+            if uniq_descid == -1: continue
+            
             ind = (np.where(tree['descid'] == uniq_descid))[0]
-            max_mass_ind = np.argmax(tree['mvir'][ind])
 
+            ### If the following assert triggers, then there is a bug in numpy unique
+            assert len(ind) > 0,"Descendant id = {} not found".format(uniq_descid)
+
+            max_mass_ind = np.argmax(tree['mvir'][ind])
             desc_loc = (np.where(tree['id'] == uniq_descid))[0]
+
+            ### Have a valid descendant id but no corresponding halo with that id!
+            ### -> BUG in the tree reading routines here or Ctrees.
+            assert len(desc_loc) > 0,"uniq_descid = {} not present in tree".format(uniq_descid)
+            assert first_prog[desc_loc] == -1,"first_prog[{}] = {} does not satisfy first assignment".format(desc_loc,first_prog[desc_loc])
             first_prog[desc_loc] = ind[max_mass_ind]
             
         return first_prog
@@ -467,14 +477,17 @@ class CTREESConverter():
         next_prog.fill(-1)
         unique_descids = np.unique(tree['descid'])
         for uniq_descid in unique_descids:
+            if uniq_descid == -1: continue
+            
             ind = (np.where(tree['descid'] == uniq_descid))[0]
             if len(ind) > 1:
                 ### sort in descending order of mass
                 sorted_mass_ind = (np.argsort(tree['mvir'][ind]))[::-1]
-
+                
                 lhs_inds = ind[sorted_mass_ind]
                 rhs_inds = np.roll(lhs_inds,-1)
-                
+
+                assert np.max(next_prog[lhs_inds]) == -1,"The next progenitor array should not already contain values"
                 next_prog[lhs_inds] = rhs_inds
 
                 ## now fix the last one so that the last progenitor
@@ -506,6 +519,7 @@ class CTREESConverter():
             for host_loc,hostid in zip(host_inds,hostids):
                 ind_subs = (np.where(tree['pid'] == hostid))[0]
                 if len(ind_subs) > 0:
+                    assert np.max(first_halo[ind_subs]) == -1,'First halo inds should not already have been assigned'
                     first_halo[ind_subs] = host_loc
             
                 
@@ -541,6 +555,7 @@ class CTREESConverter():
                     assert np.max(rhs_inds) < len(tree),'RHS inds is wrong (can not be bigger than length of tree)'
 
                     ## now set the entire array
+                    assert np.max(next_halo[lhs_inds]) == -1,'LHS inds should not already have been assigned'
                     next_halo[lhs_inds] = rhs_inds
 
                     ## fix the last subhalo issue.
@@ -949,7 +964,7 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
         f.seek(0)
         f.write(struct.pack('<i4',totntrees))
         f.write(struct.pack('<i4',totnhalos))
-        f.write(memoryview(treeNhalos).tobytes())
+        treeNhalos.tofile(f)
 
     if rank == 0:
         ## this would be the spot to sum up all the numflybys arrays over mpi
@@ -968,7 +983,7 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
         scales = np.array(scales)
         a_listfile = construct_filename_without_duplicate_slash(output_dir,'a_list.txt')
         with open(a_listfile,'w') as f:
-            f.write(scales)
+            print("{}".format(scales),file=f)
     
 
 if __name__ == '__main__':
