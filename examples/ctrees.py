@@ -17,6 +17,7 @@ import math
 from IPython.core.debugger import Tracer
 import struct
 import progressbar
+import glob
 
 def isWritable(path):
     try:
@@ -214,7 +215,7 @@ class TreesDir(BaseDirectory):
     _re_header_remove = re.compile('\(\d+\)$')
     _default_fields = ['scale', 'id', 'pid','num_prog', 'mvir', 'rvir', \
                                            'x', 'y', 'z', 'vmax']
-    # @profile
+    @profile
     def load(self, tree_root_id, additional_fields=[],locations_dict=None):
 	p = self._get_ParseFields(additional_fields)
 	tree_root_id_str = str(tree_root_id)
@@ -224,8 +225,11 @@ class TreesDir(BaseDirectory):
 
             ### Have the locations dictionary
             if locations_dict is not None:
-                offset,tree_file = locations_dict[tree_root_id]
-                tree_file = generate_filename('%s/%s.gz'%(self.dir_path, tree_file))
+                try:
+                    offset,tree_file = locations_dict[tree_root_id]
+                    tree_file = generate_filename('%s/%s.gz'%(self.dir_path, tree_file))
+                except:
+                    Tracer()()
             else:
                 with opener(location_file, 'rb') as f:
                     f.readline()
@@ -253,6 +257,19 @@ class TreesDir(BaseDirectory):
 		for l in f:
 		    if l[0] == '#': break
 		    X.append(p.parse_line(l))
+
+
+                # f.seek(offset)
+                # import pandas as pd
+                # nrows = tree_sizes[tree_root_id]
+                # usecols = p._usecols
+                # dtype = np.dtype({'names':p._names, \
+                #                       'formats':p._formats})
+
+                # df = pd.read_csv(f,delim_whitespace=True,compression=None,header=0,nrows=nrows,dtype=dtype)
+                # Tracer()
+            
+                    
 	else:
 	    for fn in self.files:
 
@@ -359,6 +376,33 @@ class CTREESConverter():
 	    'omega_l': omega_l,
 	}
 
+    def get_part_mass(self,rockstar_dir=None):
+
+        if rockstar_dir is not None:
+
+            config_files = ['rockstar.cfg','auto-rockstar.cfg','restart.cfg']
+            ##print("possible config files = {}. expected matches = {}".format(files,config_files))
+            for cfile in config_files:
+                try:
+                    with open(rockstar_dir+'/'+cfile,'rt') as f:
+                        config = f.read()
+
+                    break
+
+                except IOError:
+                    pass
+
+            if config is None:
+                raise IOError("Could  not find any valid rockstar config files in {}".format(rockstar_dir))
+
+            part_mass = re.search(r'PARTICLE_MASS\s*=\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?', config, re.I).group(1)
+            print("inside function part_mass = {}".format(part_mass))
+            return np.float(part_mass)
+
+        else:
+            raise ValueError("Need to provide Rockstar directory containing the *.cfg files")
+            
+    
     def get_snapshot_redshifts(self,scales_file=None):
 	"""Parse and convert the expansion factors.
 
@@ -410,8 +454,16 @@ class CTREESConverter():
 	return [
 	]
 
-    def map_Len(self,tree):
-        part_mass = 1.28235e9
+    def map_Len(self,tree,part_mass=None):
+        # if trees_dir is not None:
+        #     rockstar_dir = trees_dir + '/../'
+        #     part_mass = self.get_part_mass(rockstar_dir)
+        #     part_mass *= 1e-10
+
+        if part_mass is None:
+            part_mass = 0.128235
+            
+        # print("part_mass = {}".format(part_mass))
         inv_part_mass = 1.0/part_mass
         length = np.array(np.rint(tree['mvir']*inv_part_mass), dtype=np.int32)
         return length
@@ -441,7 +493,7 @@ class CTREESConverter():
 	
 	return descs
 
-    # @profile
+    @profile
     def map_FirstProgenitor(self,tree):
         """
         FirstProgenitor crosses scale factors. 
@@ -471,7 +523,7 @@ class CTREESConverter():
 
     def map_NextProgenitor(self,tree):
         """
-        NextProgenitor might not cross scale-factors
+        NextProgenitor should not cross scale-factors
         """
         next_prog = np.empty(len(tree), np.int32)
         next_prog.fill(-1)
@@ -606,25 +658,38 @@ class CTREESConverter():
         tree_sizes = dict()
 
         ## This is an embarrassingly parallel loop
-        for tree_root_id in locations.keys:
-            offset,filename = locations[tree_root_id]
-            tree_filename = generate_filename(trees_dir+'/'+filename)
-            if tree_filename is None:
-                raise IOError('Could not find tree file'.format(trees_dir+'/'+filename))
+        # for tree_root_id,_ in locations.items():
+        #     offset,filename = locations[tree_root_id]
+        #     tree_filename = generate_filename(trees_dir+'/'+filename)
+        #     if tree_filename is None:
+        #         raise IOError('Could not find tree file'.format(trees_dir+'/'+filename))
 
+        unique_filenames = []
+        for tree_root,_ in locations.items():
+            _, filename = locations[tree_root_id]
+            if filename not in unique_filenames:
+                unique_filenames.append(filename)
+        
+        
+        ## This needs to be the outer condition. I am opening and closing
+        ## the file ntrees times -> completely unnecessary!
+
+        for tree_filename in unique_filenames:
+            tree_root_id = -1
             with opener(tree_filename,'rb') as f:
-                f.seek(offset)
-                ## skip the #tree line
-                f.next()
-
-                count=0L
-                ## now loop until the next #tree
                 for line in f:
+                    if '#tree' not in line and '#' == line[0]:
+                        continue
+
                     if '#tree' in line:
-                        break
-                    count+=1
+                        if tree_root_id != -1:
+                            tree_sizes[tree_root_id] = count
+                            
+                        tree_root_id = int(line.split())[1]
+                        count=0L
+                        continue
                     
-                tree_sizes[tree_root_id] = count
+                    count+=1
 
         forest_sizes = dict()
         for forest_id in forests:
@@ -654,8 +719,6 @@ class CTREESConverter():
 
             with opener(tree_filename,'rb') as f:
                 f.seek(offset)
-                ## skip the #tree line
-                f.next()
 
                 ## now read the first output for this tree root
                 line = f.next()
@@ -666,9 +729,9 @@ class CTREESConverter():
                     Tracer()()
 
 
-        nforests = len(forests)
+        # nforests = len(forests)
         isolated_forest = []
-        for _,tree_ids in forests.items():
+        for root_id,tree_ids in forests.items():
             try:
                 num_fofs_max_scale = sum(tree_types[tree_id] for tree_id in tree_ids)
                 isolated_forest.append(False if (num_fofs_max_scale > 1) else True)
@@ -717,7 +780,7 @@ class CTREESConverter():
         return np.array(X)
                     
 
-    # @profile
+    @profile
     def iterate_trees(self,trees_dir='./',forests=None,locations=None):
 	"""
         Iterate over individual trees in CTREES.
@@ -805,7 +868,7 @@ def construct_filename_without_duplicate_slash(dirname,filename):
         return dirname + '/' + filename
 
             
-# @profile
+@profile
 def LHaloTreeWriter(trees_dir,output_dir,comm=None):
 
     if comm is None:
@@ -813,6 +876,7 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
 
         
     cls = CTREESConverter()
+    cls.trees_dir = trees_dir
     mapping_table = cls.get_mapping_table()
 
     forests = cls.load_forests(trees_dir)
@@ -820,9 +884,26 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
 
     locations = cls.load_locations(trees_dir)
     
-    ## Find out how many trees do we have that do not have flybys
-    ## and reset num_forests to that value. WARNING: NEEDS TO BE FIXED
-    ## after converter is verified
+    # ## Find out how many trees do we have that do not have flybys
+    # ## and reset num_forests to that value. WARNING: NEEDS TO BE FIXED
+    # ## after converter is verified
+    # t0 = time.time()
+    # forests_tree_sizes_file = construct_filename_without_duplicate_slash(output_dir,'lhalotree_forest_tree_sizes.npz')
+    # if not os.path.isfile(forests_tree_sizes_file):
+    #     forest_sizes,tree_sizes = cls.get_forest_sizes(trees_dir,forests,locations)
+    #     ### Saving multiple arrays -> by using "forest_sizes=forest_sizes", I can
+    #     ### save the array names as well. The load will then show the "forest_sizes" names
+    #     ### rather than the generic "arr_0" 
+    #     np.savez(forests_tree_sizes_file,forest_sizes=forest_sizes,tree_sizes=tree_sizes)
+    # else:
+    #     npzfile = np.load(forests_tree_sizes_file)
+    #     try:
+    #         forest_sizes = npzfile['forest_sizes']
+    #         tree_sizes   = npzfile['tree_sizes']
+    #     except:
+    #         Tracer()()
+    # print("Time taken to get forests and tree sizes  = {:12.4f}".format(time.time()-t0))
+
     
     t0 = time.time()
     isolated_file = construct_filename_without_duplicate_slash(output_dir,'lhalotree_isolated_forests.npy')
@@ -847,7 +928,11 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
     print("Resetting number of forests from {} to isolated forests = {}".format(num_forests,num_isolated_forests))
     ### reset num_forests
     num_forests = num_isolated_forests
-
+    # num_forests = 25
+     
+    rockstar_dir = trees_dir + '/../'
+    part_mass = 1e-10*cls.get_part_mass(rockstar_dir)
+    print("part mass = {}".format(part_mass))
     max_num_elements_buffer = 100000
     output_buffer = np.empty(max_num_elements_buffer,dtype=output_dtype)
     curr_size_output_buffer = 0
@@ -874,6 +959,10 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
             if isolated_forests[ii] == False:
                 continue
 
+            # if totntrees >= num_forests:
+            #     break
+            
+            assert len(src_tree) > 0
             Nhalos = len(src_tree)
             treeNhalos.append(Nhalos)
             totnhalos += Nhalos
@@ -893,7 +982,7 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
                     
                 except KeyError:
                     pass
-
+                
             ## Now, create all of the first/last/fof indices in dst_tree
             dst_tree['Descendant']          = cls.map_descendant(src_tree)
             dst_tree['FirstProgenitor']     = cls.map_FirstProgenitor(src_tree)
@@ -902,7 +991,15 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
             dst_tree['NextHaloInFOFgroup']  = cls.map_NextHaloInFOFgroup(src_tree)
             dst_tree['Len']                 = cls.map_Len(src_tree)
 
-
+            assert np.min(dst_tree['Len']) > 0,'Number of particles in halo must be non-zero'
+            # if totntrees == 22:
+            #     tree=dst_tree[['Descendant','FirstProgenitor','NextProgenitor','FirstHaloInFOFgroup','NextHaloInFOFgroup']]
+            #     print("## Index   Desc     FP   NP    F_FOF   N_FOF ")
+            #     for ii,itree in enumerate(tree):
+            #         print("{: >5d}   {: <25s}".format(ii,itree))
+                    
+            #     Tracer()()
+            
             ### Still need to fix flybys but this can only be done
             ### after the entire forest has been loaded. The only
             ### problem happens when there are multiple roots (FOFs) at z=0
@@ -913,6 +1010,9 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
             numflybys.append(len(ind))
             if len(ind) > 1:
 
+                print("isolated[{}] = {} pid = {} max_scale = {}".format(ii,isolated_forests[ii],src_tree['pid'][ind],max_scale))
+                print("tree_root_id = {}".format(src_tree['id'][ind]))
+                assert 0, 'Code should not come here'
                 for ifof,ifof_loc in enumerate(ind):
 
                     ## if this is the last FOF, then nothing
@@ -930,6 +1030,7 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
                     dst_tree['NextHaloInFOFgroup'][last_sub] = ind[ifof+1]
 
             assert Nhalos == len(dst_tree),'len(dst_tree) must be the same as Nhalos'
+
             #### Instead of writing out directly, add to the output buffer
             #### and then intermittently write out the output buffer
             if (curr_size_output_buffer + Nhalos) >=  max_num_elements_buffer:
@@ -945,7 +1046,7 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
             assert curr_size_output_buffer + Nhalos <= max_num_elements_buffer,"Array overflow will happen in output buffer"
             output_buffer[curr_size_output_buffer:curr_size_output_buffer+Nhalos] = dst_tree.copy()
             curr_size_output_buffer += Nhalos
-            
+
             if rank==0:
                 bar.update(ii)
 
@@ -957,33 +1058,37 @@ def LHaloTreeWriter(trees_dir,output_dir,comm=None):
             
         assert curr_size_output_buffer == 0, 'Must have written all bytes in output buffer'
         print("len(treeNhalos) = {} num_forests = {}".format(len(treeNhalos),num_forests))
-        assert len(treeNhalos) == num_forests, "TreeNhalos has %r forests instead of %r " % (len(treeNhalos),num_forests)
-        treeNhalos = np.array(treeNhalos)
+        # assert len(treeNhalos) == num_forests, "TreeNhalos has %r forests instead of %r " % (len(treeNhalos),num_forests)
+        assert len(treeNhalos) == totntrees, "TreeNhalos has %r trees instead of %r " % (len(treeNhalos),totntrees)
+        treeNhalos = np.array(treeNhalos,dtype=np.int32)
         
         ## rewind to the beginning of the output file
         f.seek(0)
         f.write(struct.pack('<i4',totntrees))
         f.write(struct.pack('<i4',totnhalos))
         treeNhalos.tofile(f)
-
+            
+        assert totnhalos == np.sum(treeNhalos)
     if rank == 0:
         ## this would be the spot to sum up all the numflybys arrays over mpi
         ##
         ##Tracer()()
         ## np.histogram(numflybys)
-        scales_file = construct_filename_without_duplicate_slash(trees_dir,'../outputs/scales.txt')
-        scales = []
-        with open(scales_file,'r') as f:
-            for line in f:
-                items = line.split()
-                a = float(items[1])
-                scales.append(1)
+        # scales_file = construct_filename_without_duplicate_slash(trees_dir,'../outputs/scales.txt')
+        # scales = []
+        # with open(scales_file,'r') as f:
+        #     for line in f:
+        #         items = line.split()
+        #         a = float(items[1])
+        #         scales.append(1)
 
         ##redshifts = cls.get_snapshot_redshifts(scales_file)
-        scales = np.array(scales)
-        a_listfile = construct_filename_without_duplicate_slash(output_dir,'a_list.txt')
-        with open(a_listfile,'w') as f:
-            print("{}".format(scales),file=f)
+        # scales = np.array(scales)
+        # a_listfile = construct_filename_without_duplicate_slash(output_dir,'a_list.txt')
+        # with open(a_listfile,'w') as f:
+        #     print("{}".format(scales),file=f)
+
+        pass
     
 
 if __name__ == '__main__':
