@@ -311,7 +311,7 @@ class TreesDir(BaseDirectory):
             return p.get_src_dtype()
     
     
-class CTREESConverter():
+class CTREESConverter(tao.Converter):
     """Subclasses tao.Converter to perform CTREES output conversion."""
 
     @classmethod
