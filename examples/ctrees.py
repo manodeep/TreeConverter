@@ -215,7 +215,7 @@ class TreesDir(BaseDirectory):
     _re_header_remove = re.compile('\(\d+\)$')
     _default_fields = ['scale', 'id', 'pid','num_prog', 'mvir', 'rvir', \
                                            'x', 'y', 'z', 'vmax']
-    @profile
+    # @profile
     def load(self, tree_root_id, additional_fields=[],locations_dict=None):
 	p = self._get_ParseFields(additional_fields)
 	tree_root_id_str = str(tree_root_id)
@@ -493,7 +493,7 @@ class CTREESConverter(tao.Converter):
 	
 	return descs
 
-    @profile
+    # @profile
     def map_FirstProgenitor(self,tree):
         """
         FirstProgenitor crosses scale factors. 
@@ -780,7 +780,7 @@ class CTREESConverter(tao.Converter):
         return np.array(X)
                     
 
-    @profile
+    # @profile
     def iterate_trees(self,trees_dir='./',forests=None,locations=None):
 	"""
         Iterate over individual trees in CTREES.
@@ -788,6 +788,9 @@ class CTREESConverter(tao.Converter):
         and all (sub)-subhalos have to be re-assigned to
         their host halos.
         """
+
+        if self.args is not None:
+            trees_dir = self.args.trees_dir
         
         new_tree = TreesDir(trees_dir)
         additional_fields = ['vx','vy','vz','Jx','Jy','Jz','Snap_num','M200b','M200c','vrms','descid','desc_scale']
@@ -868,7 +871,7 @@ def construct_filename_without_duplicate_slash(dirname,filename):
         return dirname + '/' + filename
 
             
-@profile
+# @profile
 def LHaloTreeWriter(trees_dir,output_dir,comm=None):
 
     if comm is None:
